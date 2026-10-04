@@ -94,3 +94,18 @@ def simulate_spikes(counts: pd.Series, det_kwargs: dict, multipliers, duration: 
         rows.append({"Pengali lonjakan": f"{mult}x", "Lonjakan disuntik": len(starts),
                      "Terdeteksi": hit, "Recall": hit / len(starts)})
     return pd.DataFrame(rows), false_per_hour, int(valid.sum()), len(starts)
+
+
+def run_detection(counts_all: pd.Series, view_len: int, det_kw: dict, seasonal_cfg: dict = None):
+    """Jalankan deteksi pada `view_len` menit terakhir (+ pemanasan).
+    seasonal_cfg: dict(days, half_width, same_daytype) atau None untuk mode lokal.
+    Return (counts_dipakai, seasonal_atau_None, hasil_penuh, jumlah_baris_pemanasan)."""
+    warm = det_kw["window"] + det_kw.get("m", 1) + 2
+    if seasonal_cfg is None:
+        c = counts_all.iloc[-(view_len + warm):] if view_len else counts_all
+        return c, None, detect(c, **det_kw), warm
+    tlen = min(len(counts_all), view_len + warm)
+    tidx = counts_all.index[-tlen:]
+    s = seasonal_baseline(np.sqrt(counts_all.clip(lower=0)), tidx, **seasonal_cfg)
+    c = counts_all.loc[tidx]
+    return c, s, detect(c, seasonal=s, **det_kw), warm
