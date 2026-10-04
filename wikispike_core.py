@@ -1,16 +1,30 @@
-"""Akses Wikimedia API + agregasi per menit (dipakai collector.py dan app.py)."""
+"""Akses Wikimedia (Action API + EventStreams) dan agregasi per menit.
+Dipakai bersama oleh collector.py dan app.py."""
+import json
 import time
 
 import pandas as pd
 import requests
 
-API_URL = "https://en.wikipedia.org/w/api.php"
+STREAM_URL = "https://stream.wikimedia.org/v2/stream/recentchange"
 HEADERS = {
     # Wajib: identitas kustom agar tidak kena 403. Ganti dengan kontak Anda.
-    "User-Agent": "WikiSpike/3.0 (https://github.com/REY-gifthub/wiki-streamlit; muhammadyuzaulauladi@gmail.com)"
+    "User-Agent": "WikiSpike/4.0 (https://github.com/REY-gifthub/wiki-streamlit; muhammadyuzaulauladi@gmail.com)"
 }
-HISTORY_PATH = "data/edit_counts.csv"
+DEFAULT_WIKIS = ["enwiki", "idwiki", "jawiki"]
 COLUMNS = ["edit_count", "bot_count", "unique_editors", "top_page", "top_page_share"]
+
+
+def history_path(wiki: str) -> str:
+    """enwiki tetap memakai nama berkas lama agar data v3 tidak hilang."""
+    return "data/edit_counts.csv" if wiki == "enwiki" else f"data/edit_counts_{wiki}.csv"
+
+
+def wiki_host(wiki: str) -> str:
+    """'idwiki' -> 'id.wikipedia.org' (hanya untuk proyek Wikipedia)."""
+    if not wiki.endswith("wiki") or len(wiki) <= 4:
+        raise ValueError(f"ID wiki tidak dikenali: {wiki}")
+    return f"{wiki[:-4]}.wikipedia.org"
 
 
 def safe_end_minute(now=None) -> pd.Timestamp:
@@ -20,7 +34,9 @@ def safe_end_minute(now=None) -> pd.Timestamp:
     return (now - pd.Timedelta(seconds=30)).floor("min")
 
 
-def fetch_changes(start: pd.Timestamp, max_pages: int = 60, pause: float = 0.1, session=None):
+# ---------------------------------------------------------------- Action API (live, satu wiki)
+def fetch_changes(start: pd.Timestamp, wiki: str = "enwiki", max_pages: int = 60,
+                  pause: float = 0.1, session=None):
     """Tarik suntingan dari sekarang mundur sampai `start` (Timestamp UTC).
 
     Return (raw_df, first_full_minute). `first_full_minute` adalah menit paling awal
@@ -29,6 +45,7 @@ def fetch_changes(start: pd.Timestamp, max_pages: int = 60, pause: float = 0.1, 
     """
     s = session or requests.Session()
     s.headers.update(HEADERS)
+    api = f"https://{wiki_host(wiki)}/w/api.php"
     params = {
         "action": "query", "list": "recentchanges",
         "rcprop": "title|timestamp|user|flags|ids|sizes",
@@ -38,7 +55,7 @@ def fetch_changes(start: pd.Timestamp, max_pages: int = 60, pause: float = 0.1, 
     }
     rows, complete = [], False
     for _ in range(max_pages):
-        r = s.get(API_URL, params=params, timeout=15)
+        r = s.get(api, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
         if "error" in data:
@@ -68,6 +85,62 @@ def fetch_changes(start: pd.Timestamp, max_pages: int = 60, pause: float = 0.1, 
     return df, first_full
 
 
+# ---------------------------------------------------------------- EventStreams (collector, multi-wiki)
+def stream_changes(since: pd.Timestamp, until: pd.Timestamp, wikis, max_seconds: float = 240,
+                   url: str = STREAM_URL):
+    """Konsumsi EventStreams `recentchange` dari `since` (replay historis) sampai event
+    berstempel >= `until`. Satu koneksi mencakup semua wiki; disaring di sisi klien.
+
+    Return (df, covered_until). Menit < covered_until dijamin lengkap; bila koneksi
+    putus atau waktu habis, covered_until = menit terakhir yang aman, sisanya dilanjutkan
+    pada run berikutnya. df berkolom: timestamp, wiki, title, user, bot.
+    """
+    wikis = set(wikis)
+    rows, last_ts, reached = [], None, False
+    deadline = time.monotonic() + max_seconds
+    headers = {**HEADERS, "Accept": "text/event-stream"}
+    params = {"since": since.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    stop_at = int((until + pd.Timedelta(seconds=10)).timestamp())  # toleransi urutan
+
+    try:
+        with requests.get(url, params=params, headers=headers, stream=True,
+                          timeout=(10, 45)) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if time.monotonic() > deadline:
+                    break
+                if not line or not line.startswith(b"data:"):
+                    continue
+                try:
+                    ev = json.loads(line[5:])
+                except ValueError:
+                    continue
+                ts = ev.get("timestamp")
+                if not isinstance(ts, (int, float)):
+                    continue
+                last_ts = ts if last_ts is None else max(last_ts, ts)
+                if ts >= stop_at:
+                    reached = True
+                    break
+                if ev.get("type") in ("edit", "new") and ev.get("wiki") in wikis:
+                    rows.append((ts, ev["wiki"], ev.get("title", ""),
+                                 ev.get("user", ""), bool(ev.get("bot", False))))
+    except (requests.RequestException, OSError) as e:
+        print(f"Koneksi stream terputus: {e}")
+
+    if last_ts is None:
+        return pd.DataFrame(columns=["timestamp", "wiki", "title", "user", "bot"]), None
+    df = pd.DataFrame(rows, columns=["ts", "wiki", "title", "user", "bot"])
+    df["timestamp"] = pd.to_datetime(df["ts"], unit="s", utc=True)
+    df = df.drop(columns="ts").sort_values("timestamp").reset_index(drop=True)
+    if reached:
+        covered = until
+    else:
+        covered = (pd.Timestamp(last_ts, unit="s", tz="UTC") - pd.Timedelta(seconds=10)).floor("min")
+    return df, covered
+
+
+# ---------------------------------------------------------------- agregasi
 def aggregate_minutes(raw: pd.DataFrame, start_minute, end_minute) -> pd.DataFrame:
     """Agregasi per menit pada [start_minute, end_minute). Menit tanpa suntingan = 0."""
     full = pd.date_range(start_minute, end_minute - pd.Timedelta(minutes=1),
