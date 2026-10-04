@@ -15,7 +15,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,13 +24,15 @@ jobs:
           cache: pip
       - run: pip install pandas requests
       - run: python collector.py
+        env:
+          WIKISPIKE_WIKIS: "enwiki,idwiki,jawiki"
       - name: Commit data
         run: |
-          if [ -z "$(git status --porcelain data/edit_counts.csv)" ]; then
+          if [ -z "$(git status --porcelain data)" ]; then
             echo "Tidak ada perubahan."; exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/edit_counts.csv
+          git add data
           git commit -m "data: update $(date -u +%Y-%m-%dT%H:%MZ)"
           git push
