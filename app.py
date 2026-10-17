@@ -18,6 +18,7 @@ from wikispike_core import (DEFAULT_WIKIS, aggregate_minutes, fetch_changes,
                             history_path, safe_end_minute)
 from wikispike_stats import detect, run_detection, simulate_spikes
 from collections import Counter
+from urllib.parse import quote
 
 st.set_page_config(page_title="WikiSpike", layout="wide")
 st.title("WikiSpike - Deteksi Anomali Suntingan Wikipedia")
@@ -179,25 +180,54 @@ def dashboard():
                            "bukan klasifikasi terlatih.")
 
             with col2:
-                st.subheader("🔍 Kata Kunci dari Halaman Teratas")
-                # semua menit anomali, bukan hanya yang terakhir
-                pages = full.loc[anom.index, "top_page"].dropna().astype(str)
-                pages = pages[pages.str.strip() != ""]
+                st.subheader("🔍 Halaman Teratas saat Anomali")
+                pg = full.loc[anom.index, ["top_page", "top_page_share", "edit_count"]].copy()
+                pg["top_page"] = pg["top_page"].fillna("").astype(str).str.strip()
+                pg = pg[pg["top_page"] != ""]
 
-                stop_words = {"of", "the", "and", "in", "on", "for", "to", "a", "an", "list",
-                              "is", "by", "wikipedia", "talk", "user", "di", "dan", "yang", "dari"}
-                words = []
-                for title in pages:
-                    clean = re.sub(r"[^\w\s]", " ", title.replace("_", " ")).lower()
-                    words += [w for w in clean.split() if w not in stop_words and len(w) > 2]
-
-                if words:
-                    top_words = pd.DataFrame(Counter(words).most_common(5),
-                                             columns=["Kata Kunci", "Frekuensi"])
-                    st.bar_chart(top_words.set_index("Kata Kunci"), color="#ff4b4b")
+                if pg.empty:
+                    st.info("Tidak ada data halaman teratas pada menit anomali.")
                 else:
-                    st.info("Judul halaman tidak mengandung kata kunci yang bermakna.")
-                           
+                    # perkiraan suntingan pada halaman itu = porsi x total suntingan menit tsb
+                    pg["est_edit"] = pg["top_page_share"] * pg["edit_count"]
+                    top_pages = (pg.groupby("top_page")
+                                   .agg(menit_anomali=("top_page", "size"),
+                                        porsi_rata2=("top_page_share", "mean"),
+                                        perkiraan_suntingan=("est_edit", "sum"))
+                                   .sort_values(["menit_anomali", "perkiraan_suntingan"],
+                                                ascending=False)
+                                   .head(10)
+                                   .reset_index())
+                    top_pages["porsi_rata2"] = top_pages["porsi_rata2"].round(2)
+                    top_pages["perkiraan_suntingan"] = top_pages["perkiraan_suntingan"].round(0).astype(int)
+
+                    # tautan ke artikel (wiki 'enwiki' -> 'en.wikipedia.org')
+                    lang = wiki[:-4] if wiki.endswith("wiki") else wiki
+                    top_pages["tautan"] = top_pages["top_page"].map(
+                        lambda t: f"https://{lang}.wikipedia.org/wiki/{quote(t.replace(' ', '_'))}")
+
+                    st.dataframe(
+                        top_pages.rename(columns={
+                            "top_page": "Halaman", "menit_anomali": "Menit anomali",
+                            "porsi_rata2": "Porsi rata-rata", "perkiraan_suntingan": "Perkiraan suntingan",
+                            "tautan": "Tautan"}),
+                        hide_index=True,
+                        column_config={"Tautan": st.column_config.LinkColumn("Tautan", display_text="buka")},
+                    )
+                    st.caption("Diurutkan dari halaman yang paling sering menjadi halaman teratas "
+                               "pada menit beralarm. Perkiraan suntingan = porsi x total suntingan menit itu.")
+
+                    # kata kunci dari judul-judul tersebut
+                    stop_words = {"of", "the", "and", "in", "on", "for", "to", "a", "an", "list",
+                                  "is", "by", "wikipedia", "talk", "user", "di", "dan", "yang", "dari"}
+                    words = []
+                    for title in pg["top_page"]:
+                        clean = re.sub(r"[^\w\s]", " ", title.replace("_", " ")).lower()
+                        words += [w for w in clean.split() if w not in stop_words and len(w) > 2]
+                    if words:
+                        st.markdown("**Kata kunci judul**")
+                        kw = pd.DataFrame(Counter(words).most_common(5), columns=["Kata Kunci", "Frekuensi"])
+                        st.bar_chart(kw.set_index("Kata Kunci"), color="#ff4b4b")                           
         st.subheader("Tabel Kalkulasi")
         st.dataframe(result.round(3).rename(columns={
             "edit_count": "Edit Count", "expected": "Ekspektasi", "rolling_mad": "MAD residual",
