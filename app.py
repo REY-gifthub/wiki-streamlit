@@ -164,57 +164,40 @@ def dashboard():
         st.plotly_chart(fig)
 
         if not anom.empty:
-           st.error("🚨 **Anomali Terdeteksi!** Menjalankan Investigasi Akar Masalah...")
+            st.error(f"🚨 {len(anom)} menit anomali terdeteksi.")
+            col1, col2 = st.columns(2)
 
-           col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("📊 Konteks Metrik Heuristik")
+                ctx = full.loc[anom.index, ["unique_editors", "top_page", "top_page_share", "bot_count"]].copy()
+                ctx["bot_share"] = (ctx["bot_count"] / full.loc[anom.index, "edit_count"]).round(2)
+                ctx["petunjuk"] = ctx.apply(hint, axis=1)
+                ctx.insert(0, "edit_count", anom["edit_count"])
+                ctx.insert(1, "mod_z", anom["mod_z"].round(2))
+                st.dataframe(ctx.drop(columns="bot_count"))
+                st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), "
+                           "bukan klasifikasi terlatih.")
 
-           with col1:
-                   # 1. ANALISIS METRIK & HEURISTIK (KODE ANDA)
-                   st.subheader("📊 Konteks Metrik Heuristik")
-                   ctx = full.loc[anom.index, ["unique_editors", "top_page", "top_page_share", "bot_count"]].copy()
-                   ctx["bot_share"] = (ctx["bot_count"] / full.loc[anom.index, "edit_count"]).round(2)
-                   ctx["petunjuk"] = ctx.apply(hint, axis=1) # Pastikan fungsi hint() sudah didefinisikan
-                   ctx.insert(0, "edit_count", anom["edit_count"])
-                   ctx.insert(1, "mod_z", anom["mod_z"].round(2))
-                   st.dataframe(ctx.drop(columns="bot_count"), use_container_width=True)
-                   st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), bukan klasifikasi terlatih.")
+            with col2:
+                st.subheader("🔍 Kata Kunci dari Halaman Teratas")
+                # semua menit anomali, bukan hanya yang terakhir
+                pages = full.loc[anom.index, "top_page"].dropna().astype(str)
+                pages = pages[pages.str.strip() != ""]
 
-           with col2:
-                st.subheader("🔍 Ekstraksi Topik Terkini")
-                # 1. Ambil waktu dari anomali terbaru
-                latest_anomaly_time = anom.index[-1]
-        
-                # 2. Filter variabel 'full' menggunakan iloc/loc index
-                start_time = pd.to_datetime(latest_anomaly_time)
-                end_time = start_time + pd.Timedelta(minutes=1)
-        
-                # Ambil data spesifik dari dataframe 'full'
-                suspect_data = full.loc[(full.index >= start_time) & (full.index < end_time)]
-        
-                if not suspect_data.empty:
-                   # 3. GUNAKAN KOLOM 'top_page', BUKAN 'title'
-                   all_titles = " ".join(suspect_data['top_page'].astype(str).tolist())
-            
-                   # 4. Pembersihan Teks 
-                   clean_text = re.sub(r'[^\w\s]', '', all_titles).lower()
-                   words = clean_text.split()
-            
-                   # 5. Filter Stopwords 
-                   stop_words = {'of', 'the', 'and', 'in', 'on', 'for', 'to', 'a', 'an', 'list', 'is', 'by', 'wikipedia', 'di', 'dan', 'yang', 'dari'}
-                   filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
-            
-                   if filtered_words:
-                      # 6. Hitung frekuensi kata menggunakan Counter
-                      word_counts = Counter(filtered_words)
-                      top_words = pd.DataFrame(word_counts.most_common(5), columns=['Kata Kunci', 'Frekuensi'])
-                
-                      # 7. Visualisasi Hasil
-                      st.bar_chart(top_words.set_index('Kata Kunci'), color="#ff4b4b")
-                   else:
-                      st.info("Judul artikel tidak mengandung kata kunci yang bermakna.")
-               else:
-                   st.info("Data histori untuk menit ini tidak ditemukan.")
+                stop_words = {"of", "the", "and", "in", "on", "for", "to", "a", "an", "list",
+                              "is", "by", "wikipedia", "talk", "user", "di", "dan", "yang", "dari"}
+                words = []
+                for title in pages:
+                    clean = re.sub(r"[^\w\s]", " ", title.replace("_", " ")).lower()
+                    words += [w for w in clean.split() if w not in stop_words and len(w) > 2]
 
+                if words:
+                    top_words = pd.DataFrame(Counter(words).most_common(5),
+                                             columns=["Kata Kunci", "Frekuensi"])
+                    st.bar_chart(top_words.set_index("Kata Kunci"), color="#ff4b4b")
+                else:
+                    st.info("Judul halaman tidak mengandung kata kunci yang bermakna.")
+                           
         st.subheader("Tabel Kalkulasi")
         st.dataframe(result.round(3).rename(columns={
             "edit_count": "Edit Count", "expected": "Ekspektasi", "rolling_mad": "MAD residual",
