@@ -7,7 +7,7 @@ Opsional:  st.secrets["DATA_BASE_URL"] = folder raw data, mis.
            https://raw.githubusercontent.com/USER/REPO/main/data
 """
 import os
-
+import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,6 +17,7 @@ import streamlit as st
 from wikispike_core import (DEFAULT_WIKIS, aggregate_minutes, fetch_changes,
                             history_path, safe_end_minute)
 from wikispike_stats import detect, run_detection, simulate_spikes
+from collections import Counter
 
 st.set_page_config(page_title="WikiSpike", layout="wide")
 st.title("WikiSpike - Deteksi Anomali Suntingan Wikipedia")
@@ -163,15 +164,43 @@ def dashboard():
         st.plotly_chart(fig)
 
         if not anom.empty:
-            st.subheader("Konteks anomali")
-            ctx = full.loc[anom.index, ["unique_editors", "top_page", "top_page_share", "bot_count"]].copy()
-            ctx["bot_share"] = (ctx["bot_count"] / full.loc[anom.index, "edit_count"]).round(2)
-            ctx["petunjuk"] = ctx.apply(hint, axis=1)
-            ctx.insert(0, "edit_count", anom["edit_count"])
-            ctx.insert(1, "mod_z", anom["mod_z"].round(2))
-            st.dataframe(ctx.drop(columns="bot_count"))
-            st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), "
-                       "bukan klasifikasi terlatih.")
+           st.error("🚨 **Anomali Terdeteksi!** Menjalankan Investigasi Akar Masalah...")
+
+           col1, col2 = st.columns(2)
+
+           with col1:
+                   # 1. ANALISIS METRIK & HEURISTIK (KODE ANDA)
+                   st.subheader("📊 Konteks Metrik Heuristik")
+                   ctx = full.loc[anom.index, ["unique_editors", "top_page", "top_page_share", "bot_count"]].copy()
+                   ctx["bot_share"] = (ctx["bot_count"] / full.loc[anom.index, "edit_count"]).round(2)
+                   ctx["petunjuk"] = ctx.apply(hint, axis=1) # Pastikan fungsi hint() sudah didefinisikan
+                   ctx.insert(0, "edit_count", anom["edit_count"])
+                   ctx.insert(1, "mod_z", anom["mod_z"].round(2))
+                   st.dataframe(ctx.drop(columns="bot_count"), use_container_width=True)
+                   st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), bukan klasifikasi terlatih.")
+
+           with col2:
+                   # 2. ANALISIS TOPIK TEKS (KODE TAMBAHAN SAYA)
+                   st.subheader("🔍 Ekstraksi Topik Terkini")
+                   latest_anomaly_time = anom.index[-1]
+                   start_time = pd.to_datetime(latest_anomaly_time)
+                   end_time = start_time + pd.Timedelta(minutes=1)
+        
+                   # Filter data teks spesifik (sesuaikan dengan nama variabel raw data Anda)
+                   suspect_data = full.loc[(full.index >= start_time) & (full.index < end_time)]
+        
+                   if not suspect_data.empty:
+                      all_titles = " ".join(suspect_data['title'].astype(str).tolist())
+                      clean_text = re.sub(r'[^\w\s]', '', all_titles).lower()
+                      words = clean_text.split()
+            
+                      stop_words = {'of', 'the', 'and', 'in', 'on', 'for', 'to', 'a', 'an', 'list', 'is', 'by', 'wikipedia', 'di', 'dan', 'yang', 'dari'}
+                      filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
+            
+                      word_counts = Counter(filtered_words)
+                      top_words = pd.DataFrame(word_counts.most_common(5), columns=['Kata Kunci', 'Frekuensi'])
+            
+                      st.bar_chart(top_words.set_index('Kata Kunci'), color="#ff4b4b")
 
         st.subheader("Tabel Kalkulasi")
         st.dataframe(result.round(3).rename(columns={
