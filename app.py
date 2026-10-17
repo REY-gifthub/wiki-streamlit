@@ -180,27 +180,40 @@ def dashboard():
                    st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), bukan klasifikasi terlatih.")
 
            with col2:
-                   # 2. ANALISIS TOPIK TEKS (KODE TAMBAHAN SAYA)
-                   st.subheader("🔍 Ekstraksi Topik Terkini")
-                   latest_anomaly_time = anom.index[-1]
-                   start_time = pd.to_datetime(latest_anomaly_time)
-                   end_time = start_time + pd.Timedelta(minutes=1)
+                st.subheader("🔍 Ekstraksi Topik Terkini")
+                # 1. Ambil waktu dari anomali terbaru
+                latest_anomaly_time = anom.index[-1]
         
-                   # Filter data teks spesifik (sesuaikan dengan nama variabel raw data Anda)
-                   suspect_data = full.loc[(full.index >= start_time) & (full.index < end_time)]
+                # 2. Filter variabel 'full' menggunakan iloc/loc index
+                start_time = pd.to_datetime(latest_anomaly_time)
+                end_time = start_time + pd.Timedelta(minutes=1)
         
-                   if not suspect_data.empty:
-                      all_titles = " ".join(suspect_data['title'].astype(str).tolist())
-                      clean_text = re.sub(r'[^\w\s]', '', all_titles).lower()
-                      words = clean_text.split()
+                # Ambil data spesifik dari dataframe 'full'
+                suspect_data = full.loc[(full.index >= start_time) & (full.index < end_time)]
+        
+                if not suspect_data.empty:
+                   # 3. GUNAKAN KOLOM 'top_page', BUKAN 'title'
+                   all_titles = " ".join(suspect_data['top_page'].astype(str).tolist())
             
-                      stop_words = {'of', 'the', 'and', 'in', 'on', 'for', 'to', 'a', 'an', 'list', 'is', 'by', 'wikipedia', 'di', 'dan', 'yang', 'dari'}
-                      filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
+                   # 4. Pembersihan Teks 
+                   clean_text = re.sub(r'[^\w\s]', '', all_titles).lower()
+                   words = clean_text.split()
             
+                   # 5. Filter Stopwords 
+                   stop_words = {'of', 'the', 'and', 'in', 'on', 'for', 'to', 'a', 'an', 'list', 'is', 'by', 'wikipedia', 'di', 'dan', 'yang', 'dari'}
+                   filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
+            
+                   if filtered_words:
+                      # 6. Hitung frekuensi kata menggunakan Counter
                       word_counts = Counter(filtered_words)
                       top_words = pd.DataFrame(word_counts.most_common(5), columns=['Kata Kunci', 'Frekuensi'])
-            
+                
+                      # 7. Visualisasi Hasil
                       st.bar_chart(top_words.set_index('Kata Kunci'), color="#ff4b4b")
+                   else:
+                      st.info("Judul artikel tidak mengandung kata kunci yang bermakna.")
+               else:
+                   st.info("Data histori untuk menit ini tidak ditemukan.")
 
         st.subheader("Tabel Kalkulasi")
         st.dataframe(result.round(3).rename(columns={
