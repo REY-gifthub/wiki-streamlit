@@ -171,12 +171,15 @@ def dashboard():
             with col1:
                 st.subheader("📊 Konteks Metrik Heuristik")
                 ctx = full.loc[anom.index, ["unique_editors", "top_page", "top_page_share", "bot_count"]].copy()
-                ctx["bot_share"] = (ctx["bot_count"] / full.loc[anom.index, "edit_count"]).round(2)
+                total = full.loc[anom.index, "edit_count"]
+                ctx["bot_share"] = (ctx["bot_count"] / total).round(2)
                 ctx["petunjuk"] = ctx.apply(hint, axis=1)
-                ctx.insert(0, "edit_count", anom["edit_count"])
-                ctx.insert(1, "mod_z", anom["mod_z"].round(2))
+                ctx.insert(0, "edit_count", anom["edit_count"])   # yang dideteksi (tanpa bot bila dicentang)
+                ctx.insert(1, "total_edit", total)                # total suntingan termasuk bot
+                ctx.insert(2, "mod_z", anom["mod_z"].round(2))
                 st.dataframe(ctx.drop(columns="bot_count"))
-                st.caption("Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), "
+                st.caption("edit_count = jumlah yang dideteksi; total_edit = termasuk bot. "
+                           "Petunjuk bersifat heuristik (bot >= 60%, halaman teratas >= 25%), "
                            "bukan klasifikasi terlatih.")
 
             with col2:
