@@ -1,11 +1,3 @@
-"""
-WikiSpike v4 - Deteksi Anomali Aktivitas Suntingan Wikipedia (multi-wiki)
-Baseline musiman dari riwayat collector + shifted Robust Modified Z-Score.
-
-Jalankan:  streamlit run app.py
-Opsional:  st.secrets["DATA_BASE_URL"] = folder raw data, mis.
-           https://raw.githubusercontent.com/USER/REPO/main/data
-"""
 import os
 import re
 import numpy as np
